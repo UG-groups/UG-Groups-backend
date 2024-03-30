@@ -14,9 +14,11 @@ class UserCreate(UserBase):
     passwordConfirm: str
     captchaToken: str
 
+
 # post /verify-code/
 class Code(BaseModel):
     code: str
+
 
 # patch /me/
 class ProfilePatch(BaseModel):
@@ -34,8 +36,9 @@ class Token(BaseModel):
     accessToken: str
     tokenType: str
 
+
 # get /me/
 class ProfileResponse(UserBase):
-    profileImageUrl: HttpUrl
+    profileImageUrl: HttpUrl | None = None
     createdAt: datetime
     updatedAt: datetime

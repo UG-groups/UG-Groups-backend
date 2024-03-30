@@ -45,6 +45,12 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 router = APIRouter(tags=["registration"])
 
+cloudinary.config(
+  cloud_name = config("CLOUD_NAME", cast=str),
+  api_key = config("API_KEY", cast=str),
+  api_secret = config("API_SECRET", cast=str),
+)
+
 
 def generate_authentication_token(user_id):
     expires = datetime.utcnow() + timedelta(minutes=AUTH_TOKEN_EXPIRATION_MINUTES)
@@ -234,7 +240,7 @@ async def signin(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
     # Searches the user that matches the given email (username)
     if user := await User.find_one(User.email == form_data.username):
 
-        if not pwd_context.verify(form_data.password, user["password"]):
+        if not pwd_context.verify(form_data.password, user.password):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 headers={"WWW-Authenticate": "Bearer"},
@@ -244,12 +250,12 @@ async def signin(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
         return generate_authentication_token(user.id)
 
     # Searches if given email corresponds to user in draft
-    if await UserDraft.find_one(UserDraft.email == form_data.username):
+    if await UserDraft.find_one(UserDraft.email.value == form_data.username):
         return JSONResponse(
             status_code=status.HTTP_300_MULTIPLE_CHOICES,
             content=jsonable_encoder({
                 "redirectPath": "/verify-email/",
-                "email": form_data.email
+                "email": form_data.username
             })
         )
 
@@ -269,16 +275,20 @@ async def get_profile_data(
     return user
 
 
-# TODO
-@router.patch("/me/")
+@router.patch("/me/", response_model=schemas.ProfileResponse)
 async def profile_patch(
     profilePatch: schemas.ProfilePatch,
     user = Depends(get_current_user)
 ):
-    return
+    for key, value in profilePatch.model_dump(exclude_unset=True).items():
+        setattr(user, key, value)
+    await user.replace()
+    await user.sync()
+
+    return user
 
 
-@router.patch("/profile/update-profile-image/")
+@router.patch("/me/update-profile-image/")
 async def update_profile_image(
     profileImage: UploadFile,
     user = Depends(get_current_user)

@@ -37,6 +37,7 @@ class User(Document, UserBase):
     def update_updatedAt_field(self):
         self.updatedAt = datetime.utcnow()
 
+
 class VerifyEmail(BaseModel):
     value: EmailStr
     code: str | None = None
