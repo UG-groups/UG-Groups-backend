@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UG Groups Email</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --border: 1.5px solid rgb(31 41 55);
+        }
+        .content-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 93%;
+            max-width: 680px;
+            margin-left: auto;
+            margin-right: auto;
+            border: var(--border);
+            border-radius: 10px;
+            font-family: "Inter", sans-serif;
+            font-optical-sizing: auto;
+            font-style: normal;
+            font-variation-settings: "slnt" 0;
+        }
+        .header {
+            width: 100%;
+            padding: 10px 0;
+            text-align: center;
+            border-bottom: var(--border);
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 2.4em;
+            line-height: 1.3em;
+            font-weight: 500;
+            color: rgb(202 138 4);
+        }
+        .body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            padding: 15px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="content-wrapper">
+        <div class="header">
+            <h1>UG Groups</h1>
+        </div>
+        <div class="body">
+            {% block content %}{% endblock %}
+        </div>
+    </div>
+</body>
+
+</html>
