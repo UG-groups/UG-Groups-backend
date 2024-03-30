@@ -39,7 +39,7 @@ def send_email(user_email, verification_code):
     message.attach(html_part)
 
     # send your email
-    with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+    with smtplib.SMTP_SSL(EMAIL_HOST, EMAIL_PORT) as server:
         server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
         server.sendmail(
             EMAIL_FROM, user_email, message.as_string()
