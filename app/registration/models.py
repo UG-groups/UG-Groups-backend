@@ -1,31 +1,41 @@
 from typing import Literal
 from datetime import datetime
 
-from beanie import Document, before_event, Replace
-from pydantic import BaseModel, EmailStr, Field
+from beanie import Document, before_event, Replace, Link
+from pydantic import BaseModel, EmailStr, Field, field_serializer
+from pydantic.networks import HttpUrl
+
+from ..groups.models import Group
 
 
 # ********* BASE MODELS *********
 # Here we define models which may be used as base for schema models and beanie models
 
+class ProfileImage(BaseModel):
+    url: HttpUrl
+    publicId: str
 class UserBase(BaseModel):
     firstName: str
     lastName: str
     email: EmailStr
+    profileImage: ProfileImage | None = None
     bio: str | None = None
     userType: Literal["student", "administrative/teacher"]
+    isOfficialUser: bool = False
     division: str
-    academicLevel: str | None = None
+    academicLevel: Literal["highSchool", "bachelor", "master", "PhD"] | None = None
     degreeName: str | None = None
+    administeringGroups: list[Link[Group]] = []
+    joinedGroups: list[Link[Group]] = []
+
+    @field_serializer('profileImage', when_used="always")
+    def serialize_profile_image(self, profileImage: ProfileImage | None):
+        return profileImage.url if profileImage else None
 
 
 # ********* BEANIE MODELS *********
 
-class ProfileImage(BaseModel):
-    url: str
-    publicId: str
 class User(Document, UserBase):
-    profileImage: ProfileImage | None = None
     password: str
     createdAt: datetime = Field(default_factory=datetime.utcnow)
     updatedAt: datetime = Field(default_factory=datetime.utcnow)

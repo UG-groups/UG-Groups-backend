@@ -11,7 +11,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
 
 from app.registration.router import router as registration_router
+from app.groups.router import router as groups_router
 from app.registration.models import User, UserDraft
+from app.groups.models import Group
 
 
 DB_URL = config("DB_URL", cast=str)
@@ -20,14 +22,14 @@ DB_NAME = config("DB_NAME", cast=str)
 ORIGIN = config("ORIGIN", cast=str)
 
 
-beanie_models = [User, UserDraft]
+beanie_models = [User, UserDraft, Group]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.mongo_client = AsyncIOMotorClient(DB_URL)
     await init_beanie(database=app.mongo_client["ug-groups"], document_models=beanie_models)
     yield
-    app.mongodb_client.close()
+    app.mongo_client.close()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -41,6 +43,7 @@ app.add_middleware(
 )
 
 app.include_router(registration_router)
+app.include_router(groups_router)
 
 
 @app.exception_handler(ExpiredSignatureError)

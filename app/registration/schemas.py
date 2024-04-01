@@ -39,6 +39,5 @@ class Token(BaseModel):
 
 # get /me/
 class ProfileResponse(UserBase):
-    profileImageUrl: HttpUrl | None = None
     createdAt: datetime
     updatedAt: datetime

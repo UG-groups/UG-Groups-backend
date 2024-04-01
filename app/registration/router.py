@@ -295,7 +295,7 @@ async def update_profile_image(
 ):
     try:
         # Before uploading the image to cloudinary delete the previous (if any exists)
-        if "profileImage" in user:
+        if user.profileImage:
             cloudinary.api.delete_resources([user.profileImage.publicId])
 
         # Upload image to cloudinary
