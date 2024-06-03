@@ -1,151 +1,109 @@
-from typing import Annotated, Literal
+from typing import Annotated
+import textwrap
+import os
 
-from fastapi import APIRouter, HTTPException, status, Depends, Form, UploadFile
-from fastapi.responses import JSONResponse
-from fastapi.encoders import jsonable_encoder
+from fastapi import APIRouter, HTTPException, status, Depends, Form, UploadFile, Body
 from pydantic.networks import HttpUrl
-from decouple import config
-import cloudinary
-import cloudinary.api
-import cloudinary.uploader
 
-from . import schemas
+from . import schemas, enums
 from .models import Group
+from .dependencies import fetch_group
+from .utils import check_user_is_group_admin
+from ..miscellaneous.utils import get_media_root
 from ..registration.models import User
-from ..miscellaneous.dependencies import get_current_user
+from ..miscellaneous.dependencies import get_current_user, validate_upload_file
 
+
+MEDIA_ROOT = get_media_root()
 
 router = APIRouter(prefix="/groups", tags=["groups"])
 
-cloudinary.config(
-  cloud_name = config("CLOUD_NAME", cast=str),
-  api_key = config("API_KEY", cast=str),
-  api_secret = config("API_SECRET", cast=str),
-)
-
 
 # Here path parameters were defined one by one manually (instead of using a Pydantic model)
-# because for this path operation we expect to receive a file (groupImage), so request body
-# should be sent as form data, forcing us to define all the expected fields in request's
-# body as Form() path parameters.
+# because for this path we expect to receive a file (groupImage), so request body should
+# be sent as form data, forcing us to define all expected fields in request's body as
+# Form() path parameters.
 @router.post("/", response_model=schemas.GroupResponse)
 async def create_group(
+    user: Annotated[User, Depends(get_current_user)],
     name: Annotated[str, Form()],
     description: Annotated[str, Form()],
-    groupImage: Annotated[UploadFile | None, Form()] = None,
+    accessibility: Annotated[enums.AccessibilityEnum, Form()],
+    whoCanPublish: Annotated[enums.WhoCanPublishEnum, Form()],
+    groupImage: Annotated[UploadFile | None, UploadFile] = None,
     groupColor: Annotated[str | None, Form()] = None,
-    externalLink: Annotated[HttpUrl | None, Form()] = None,
-    accessibility: Annotated[Literal["public", "private"] | None, Form()] = None,
-    whoCanPublish: Annotated[Literal["members", "onlyAdmins"] | None, Form()] = None,
-    user = Depends(get_current_user)
+    externalLink: Annotated[HttpUrl | None, Form()] = None
 ):
-    # If included a group image in request uploads group image to cloudinary
-    if groupImage:
-        try:
-            upload_result = cloudinary.uploader.upload(groupImage.file, folder="groupImages")
-            cloudinary_asset = cloudinary.api.resource_by_asset_id(upload_result["asset_id"])
-
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Ocurrió un error inesperado mientras se subía la foto del grupo"
-            ) from exc
-
     # Creates in db a new group with submitted data
     new_group = Group(
         name = name,
         description = description,
-        groupImage = {
-            "url": cloudinary_asset["secure_url"],
-            "publicId": cloudinary_asset["public_id"]
-        } if groupImage else None,
+        accessibility = accessibility,
+        whoCanPublish = whoCanPublish,
         groupColor = groupColor,
         externalLink = externalLink,
+        admins = [user]
     )
-    if accessibility:
-        new_group.accessibility = accessibility
-    if whoCanPublish:
-        new_group.whoCanPublish = whoCanPublish
+    new_group = await new_group.insert()
 
-    created_group = await new_group.insert()
+    # If recieved groupImage in request validates and saves it in file system
+    if groupImage:
+        validate_upload_file(groupImage)
 
-    # Add newly created group to user's administering and joined groups
-    user.administeringGroups.append(created_group)
-    user.joinedGroups.append(created_group)
-    await user.replace()
+        path = f"/groupImages/{str(new_group.id)}.{groupImage.filename.split('.')[-1]}"
+        with open(MEDIA_ROOT + path, "wb") as new_file:
+            new_file.write(await groupImage.read())
 
-    return created_group
+        new_group.groupImage = "/media" + path
+        await new_group.replace()
+
+    return new_group
 
 
-@router.get("/info/{groupId}/", response_model=schemas.GroupResponse)
-async def get_group(groupId: str):
-    if not (group := await Group.get(groupId)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="El grupo solicitado no existe"
-        )
-
+# Path operation for returning all information of a group
+@router.get("/{groupId}/", response_model=schemas.GroupResponse)
+async def get_group_info(group: Annotated[Group, Depends(fetch_group)]):
+    await group.fetch_link(Group.admins)
+    await group.fetch_link(Group.members)
     return group
 
 
-@router.patch("/{groupId}/", response_model=schemas.GroupResponse)
+@router.patch("/{groupId}/")
 async def patch_group(
-    groupId: str,
     groupPatch: schemas.GroupPatch,
-    user = Depends(get_current_user)
+    group: Annotated[Group, Depends(fetch_group)],
+    user: Annotated[User, Depends(get_current_user)]
 ):
-    if not (group := await Group.get(groupId)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="El grupo solicitado no existe"
-        )
-
-    await user.fetch_link(User.administeringGroups)
-    if group not in user.administeringGroups:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Solo los administradores pueden editar la información de un grupo"
-        )
+    check_user_is_group_admin(user, group)
 
     for key, value in groupPatch.model_dump(exclude_unset=True).items():
         setattr(group, key, value)
     await group.replace()
     await group.sync()
 
-    return group
+    return {"msg": "ok"}
 
 
-@router.patch("/update-group-image/{groupId}/")
+@router.patch("/{groupId}/group-image/")
 async def update_profile_image(
-    groupId: str,
-    groupImage: UploadFile,
-    user = Depends(get_current_user)
+    group: Annotated[Group, Depends(fetch_group)],
+    group_image: Annotated[UploadFile, Depends(validate_upload_file)],
+    user: Annotated[User, Depends(get_current_user)]
 ):
-    if not (group := await Group.get(groupId)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="El grupo solicitado no existe"
-        )
-
-    await user.fetch_link(User.administeringGroups)
-    if group not in user.administeringGroups:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Solo los administradores pueden editar la imagen de un grupo"
-        )
+    check_user_is_group_admin(user, group)
 
     try:
-        # Before uploading the image to cloudinary delete the previous (if any exists)
+        # Before saving the new image delete previous (if any exists)
         if group.groupImage:
-            cloudinary.api.delete_resources([group.groupImage.publicId])
+            os.remove(MEDIA_ROOT + group.groupImage[6:])
 
-        # Upload image to cloudinary
-        upload_result = cloudinary.uploader.upload(groupImage.file, folder="groupImages")
-        cloudinary_asset = cloudinary.api.resource_by_asset_id(upload_result["asset_id"])
-        group.groupImage = {
-            "url": cloudinary_asset["secure_url"],
-            "publicId": cloudinary_asset["public_id"]
-        }
+        # Saves new group image in filesystem
+        path = f"/groupImages/{str(group.id)}.{group_image.filename.split('.')[-1]}"
+        with open(MEDIA_ROOT + path, "wb") as new_file:
+            new_file.write(await group_image.read())
+
+        group_image = "/media" + path
+        group.groupImage = group_image
         await group.replace()
 
     except Exception as exc:
@@ -154,29 +112,200 @@ async def update_profile_image(
             detail="Ocurrió un error inesperado mientras se actualizaba la imagen del grupo"
         ) from exc
 
-    return {"groupImageUrl": cloudinary_asset["secure_url"]}
+    return {"groupImage": group_image}
 
 
 @router.delete("/{groupId}/")
-async def delete_group(groupId: str, user = Depends(get_current_user)):
-    if not (group := await Group.get(groupId)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="El grupo solicitado no existe"
-        )
+async def delete_group(
+    group: Annotated[Group, Depends(fetch_group)],
+    user: Annotated[User, Depends(get_current_user)]
+):
+    check_user_is_group_admin(user, group)
 
-    await user.fetch_link(User.administeringGroups)
-    if group not in user.administeringGroups:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Solo los administradores pueden eliminar un grupo"
-        )
+    # If group has an image deletes it
+    if group.groupImage:
+        os.remove(MEDIA_ROOT + group.groupImage[6:])
 
-    await user.fetch_link(User.joinedGroups)
     await group.delete()
 
-    user.administeringGroups.remove(group)
-    user.joinedGroups.remove(group)
-    await user.replace()
+    return {"msg": "ok"}
 
-    return JSONResponse(jsonable_encoder({"message": "Grupo eliminado exitosamente"}))
+
+@router.get("/{groupId}/admins/", response_model=schemas.GroupUsersResponse)
+async def get_group_admins(
+    group: Annotated[Group, Depends(fetch_group)],
+):
+    await group.fetch_link(Group.admins)
+    return {"users": group.admins}
+
+
+@router.get("/{groupId}/members/", response_model=schemas.GroupUsersResponse)
+async def get_group_members(
+    group: Annotated[Group, Depends(fetch_group)],
+):
+    await group.fetch_link(Group.members)
+    return {"users": group.members}
+
+
+@router.post("/{groupId}/join/")
+async def join_group(
+    group: Annotated[Group, Depends(fetch_group)],
+    user: Annotated[User, Depends(get_current_user)]
+):
+    # Checks that user hasn't already joined this group neither is in the list of users
+    # that have requested to join
+    if (
+        user.id in [user.ref.id for user in group.members] or
+        user.id in [user.ref.id for user in group.admins] or
+        user.id in [user.ref.id for user in group.joinRequests]
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=textwrap.dedent("""
+                Ya estas dentro de este grupo o en la lista de usuarios que han solicitado
+                unirse
+            """).replace("\n", " ").strip()
+        )
+
+    # If group accessibility is public just add user tu members list
+    if group.accessibility == "public":
+        group.members.append(user)
+        await group.replace()
+        return {"msg": "Te uniste al grupo exitosamente"}
+
+    # If group accessibility is private then add user to list of users that have requested
+    # to join
+    group.joinRequests.append(user)
+    await group.replace()
+    return {"msg": "Solicitud enviada exitosamente"}
+
+
+@router.get("/{groupId}/join-requests/", response_model=schemas.GroupUsersResponse)
+async def get_group_join_requests(
+    group: Annotated[Group, Depends(fetch_group)],
+    user: Annotated[User, Depends(get_current_user)]
+):
+    check_user_is_group_admin(user, group)
+
+    await group.fetch_link(Group.joinRequests)
+    return {"users": group.joinRequests}
+
+
+@router.post("/{groupId}/approve-join-request/")
+async def approve_join_request(
+    group: Annotated[Group, Depends(fetch_group)],
+    user: Annotated[User, Depends(get_current_user)],
+    userToApprove: Annotated[str, Body()]
+):
+    check_user_is_group_admin(user, group)
+
+    try:
+        i_user_to_appr = [str(user.ref.id) for user in group.joinRequests].index(userToApprove)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=textwrap.dedent("""
+                No se encontró ningún usuario en la lista de solicitudes de unión al grupo
+                que corresponda con el id proporcionado
+            """).replace("\n", " ").strip()
+        ) from exc
+
+    user_approved = await User.get(group.joinRequests.pop(i_user_to_appr).ref.id)
+    group.members.append(user_approved)
+    await group.replace()
+
+    return {"msg": "ok"}
+
+
+@router.post("/{groupId}/make-admin/")
+async def make_member_admin(
+    group: Annotated[Group, Depends(fetch_group)],
+    user: Annotated[User, Depends(get_current_user)],
+    member_granted: Annotated[str, Body()]
+):
+    check_user_is_group_admin(user, group)
+
+    try:
+        i_member = [str(user.ref.id) for user in group.members].index(member_granted)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=textwrap.dedent("""
+                No se encontró en la lista de miembros ningún usuario que corresponda con el
+                id proporcionado
+            """).replace("\n", " ").split()
+        ) from exc
+
+    member_granted = await User.get(group.members.pop(i_member).ref.id)
+    group.admins.append(member_granted)
+    await group.replace()
+
+    return {"msg": "ok"}
+
+
+@router.post("/{groupId}/left/")
+async def left_group(
+    group: Annotated[Group, Depends(fetch_group)],
+    user: Annotated[User, Depends(get_current_user)]
+):
+    try:
+        i_user = [user.ref.id for user in group.members].index(user.id)
+        del group.members[i_user]
+
+    except ValueError as exc:
+        try:
+            i_user = [user.ref.id for user in group.admins].index(user.id)
+
+            # If user is admin of the group but they is the only admin raise error
+            if len(group.admins) == 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=textwrap.dedent("""
+                        Ningún grupo puede quedarse sin administradores, agrega a un nuevo
+                        administrador e intanta de nuevo
+                    """).replace("\n", " ").strip()
+                ) from exc
+
+            del group.admins[i_user]
+
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Al parecer no estas dentro de este grupo, ninguna acción fue realizada"
+            ) from exc
+
+    await group.replace()
+
+    return {"msg": "ok"}
+
+
+# Path operation for removing members or admins from a group
+@router.post("/{groupId}/remove-member/")
+async def remove_member_from_group(
+    group: Annotated[Group, Depends(fetch_group)],
+    user: Annotated[User, Depends(get_current_user)],
+    userToRemove: Annotated[str, Body()]
+):
+    check_user_is_group_admin(user, group)
+
+    try:
+        i_user = [str(user.ref.id) for user in group.members].index(userToRemove)
+        del group.members[i_user]
+
+    except ValueError as exc:
+        try:
+            i_user = [str(user.ref.id) for user in group.admins].index(userToRemove)
+            del group.admins[i_user]
+
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=textwrap.dedent("""
+                    No se encontró ningún usuario entre los miembros o administradores del
+                    grupo que corresponda con el id proporcionado
+                """).replace("\n", " ").strip()
+            ) from exc
+
+    await group.replace()
+
+    return {"msg": "ok"}

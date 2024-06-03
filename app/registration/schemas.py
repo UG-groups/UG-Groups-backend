@@ -1,9 +1,9 @@
-from datetime import datetime
-
 from pydantic import BaseModel
-from pydantic.networks import HttpUrl
 
 from .models import UserBase
+from . import enums as registration_enums
+from ..groups import enums as groups_enums
+from ..miscellaneous.pydantic_types import StrObjectId, ISOSerWrappedDt
 
 
 # ********* Request schemas *********
@@ -12,7 +12,6 @@ from .models import UserBase
 class UserCreate(UserBase):
     password: str
     passwordConfirm: str
-    captchaToken: str
 
 
 # post /verify-code/
@@ -22,10 +21,10 @@ class Code(BaseModel):
 
 # patch /me/
 class ProfilePatch(BaseModel):
-    bio: str | None = None
-    division: str
-    academicLevel: str | None = None
-    degreeName: str | None = None
+    bio: str
+    division: str # TODO make this field enum
+    academicLevel: registration_enums.AcademicLevelEnum | None = None
+    degreeName: str | None = None # TODO make this field enum
 
 
 # ********* Response schemas *********
@@ -39,5 +38,17 @@ class Token(BaseModel):
 
 # get /me/
 class ProfileResponse(UserBase):
-    createdAt: datetime
-    updatedAt: datetime
+    createdAt: ISOSerWrappedDt
+    updatedAt: ISOSerWrappedDt
+
+
+# get /groups-iam-admin/
+# get /groups-iam-member/
+class ListGroup(BaseModel):
+    id: StrObjectId
+    name: str
+    groupImage: str | None = None
+    groupColor: str | None = None
+    accessibility: groups_enums.AccessibilityEnum
+class GroupsResponse(BaseModel):
+    groups: list[ListGroup]

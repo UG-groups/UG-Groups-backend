@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,6 +15,7 @@ from app.registration.router import router as registration_router
 from app.groups.router import router as groups_router
 from app.registration.models import User, UserDraft
 from app.groups.models import Group
+from app.miscellaneous.utils import get_media_root
 
 
 DB_URL = config("DB_URL", cast=str)
@@ -22,13 +24,25 @@ DB_NAME = config("DB_NAME", cast=str)
 ORIGIN = config("ORIGIN", cast=str)
 
 
+MEDIA_ROOT = get_media_root()
+
 beanie_models = [User, UserDraft, Group]
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Init beanie
     app.mongo_client = AsyncIOMotorClient(DB_URL)
-    await init_beanie(database=app.mongo_client["ug-groups"], document_models=beanie_models)
+    await init_beanie(database=app.mongo_client[DB_NAME], document_models=beanie_models)
+
+    # Checks if directories for media files exist and if not create them
+    dirs = ["profileImages", "groupImages", "postMultimedia"]
+    for directory in dirs:
+        if not os.path.isdir(os.path.join(MEDIA_ROOT, directory)):
+            os.makedirs(os.path.join(MEDIA_ROOT, directory))
+
     yield
+
     app.mongo_client.close()
 
 
