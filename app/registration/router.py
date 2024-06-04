@@ -5,7 +5,7 @@ import string
 import textwrap
 import os
 
-from fastapi import APIRouter, HTTPException, status, Depends, UploadFile
+from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, Body
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.security import OAuth2PasswordRequestForm
@@ -15,11 +15,11 @@ from passlib.context import CryptContext
 from jose import jwt
 
 from . import schemas
-from .models import User, UserDraft
+from .models import User, UserDraft, PwdResetToken
 from ..groups.models import Group
 from ..miscellaneous.dependencies import get_current_user, validate_upload_file
 from ..miscellaneous.utils import get_media_root
-from ..email_utils.send_email import send_email
+from ..email_utils.send_email import send_verification_code_email, send_password_reset_email
 
 
 # ENVIRONMENT VARIABLES
@@ -70,7 +70,7 @@ async def save_and_send_verif_code(email: str):
     draft_user.email.codeIssuedAt = now
     await draft_user.replace()
 
-    send_email(email, code)
+    send_verification_code_email(email, code)
 
     return now + timedelta(minutes=VERIF_CODE_RESEND_T)
 
@@ -250,6 +250,62 @@ async def signin(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
             No existe ningún usuario registrado con el correo <{form_data.username}>
         """.strip()}
     )
+
+
+@router.post("/request-password-reset/")
+async def request_password_reset(email: EmailStr = Body(embed=True)):
+    # Verifies a user with the given email exists
+    if not (user := await User.find_one(User.email == email)):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No se encontró ningún usuario con el correo electrónico <{email}>"
+        )
+
+    # Checks if a token for password reset exists for the user making the request.
+    # If token exist check if it's still valid, if is raise a HTTPException, else delete
+    # current token
+    if current_token := await PwdResetToken.find_one(PwdResetToken.userEmail == user.email):
+        if datetime.utcnow() < current_token.expirationDate:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=textwrap.dedent("""
+                    Recientemente has solicitado una restauración de tu contraseña, espera
+                    el tiempo asignado entre solicitudes (5 minutos) y vuelve a intentarlo
+                """).replace("\n", " ").strip()
+            )
+
+        else:
+            await current_token.delete()
+
+    # Generates and saves a new token for password reset
+    pwd_reset_token = await PwdResetToken(userEmail=user.email).insert()
+
+    # Send email with the link for password resetting with token embbeded
+    send_password_reset_email(user.email, pwd_reset_token.value)
+
+    return {"msg": "ok"}
+
+
+@router.post("/reset-password/")
+async def reset_password(token: str, newPassword: str = Body(embed=True)):
+    if (
+        not (pwd_rst_tkn := await PwdResetToken.find_one(PwdResetToken.value == token)) or
+        datetime.utcnow() > pwd_rst_tkn.expirationDate
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=textwrap.dedent("""
+                El token proporcionado para restaurar la contraseña es invalido o ya expiró
+            """)
+        )
+
+    user = await User.find_one(User.email == pwd_rst_tkn.userEmail)
+    user.password = pwd_context.hash(newPassword)
+    await user.replace()
+
+    await pwd_rst_tkn.delete()
+
+    return {"msg": "Contraseña restaurada exitosamente"}
 
 
 @router.get("/me/", response_model=schemas.ProfileResponse)

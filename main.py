@@ -13,7 +13,7 @@ from beanie import init_beanie
 
 from app.registration.router import router as registration_router
 from app.groups.router import router as groups_router
-from app.registration.models import User, UserDraft
+from app.registration.models import User, UserDraft, PwdResetToken
 from app.groups.models import Group
 from app.miscellaneous.utils import get_media_root
 
@@ -26,7 +26,7 @@ ORIGIN = config("ORIGIN", cast=str)
 
 MEDIA_ROOT = get_media_root()
 
-beanie_models = [User, UserDraft, Group]
+beanie_models = [ User, UserDraft, PwdResetToken, Group ]
 
 
 @asynccontextmanager

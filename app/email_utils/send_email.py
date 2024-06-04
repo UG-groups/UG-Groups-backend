@@ -1,11 +1,13 @@
+import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import smtplib
-import textwrap
 
 from decouple import config
 from jinja2 import Environment, FileSystemLoader
+from pydantic import EmailStr
 
+
+ORIGIN = config("ORIGIN", cast=str)
 
 EMAIL_HOST = config('EMAIL_HOST', cast=str)
 EMAIL_PORT = config('EMAIL_PORT', cast=str)
@@ -15,32 +17,42 @@ EMAIL_FROM = config('EMAIL_FROM', cast=str)
 
 
 env = Environment(loader=FileSystemLoader("./app/email_utils/templates"))
-template = env.get_template("verification_code.html")
 
 
-def send_email(user_email, verification_code):
+def send_email(destination_email: EmailStr, subject: str, html_content):
     message = MIMEMultipart("alternative")
-    message["Subject"] = "Código de verificación"
+    message["Subject"] = subject
     message["From"] = EMAIL_FROM
-    message["To"] = user_email
+    message["To"] = destination_email
 
-    # write the text/plain part
-    text = f"""
-        UG Groups
-        Tu código de verificación es: {verification_code}
-    """
-    # write the HTML part
-    html = template.render({"verification_code": verification_code})
-
-    # convert both parts to MIMEText objects and add them to the MIMEMultipart message
-    plain_text_part = MIMEText(textwrap.dedent(text).strip(), "plain")
-    html_part = MIMEText(html, "html")
-    message.attach(plain_text_part)
-    message.attach(html_part)
+    # converts html content to a MIMEText object and add it to the MIMEMultipart message
+    message.attach(MIMEText(html_content, "html"))
 
     # send your email
     with smtplib.SMTP_SSL(EMAIL_HOST, EMAIL_PORT) as server:
         server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
         server.sendmail(
-            EMAIL_FROM, user_email, message.as_string()
+            EMAIL_FROM, destination_email, message.as_string()
         )
+
+
+def send_verification_code_email(destination_email, verification_code):
+    template = env.get_template("verification_code.html")
+    html_content = template.render({"verification_code": verification_code})
+
+    send_email(
+        destination_email,
+        "Código de verificación",
+        html_content
+    )
+
+
+def send_password_reset_email(destination_email, token):
+    template = env.get_template("password_reset.html")
+    html_content = template.render({"origin": ORIGIN, "token": token})
+
+    send_email(
+        destination_email,
+        "Solicitud de restauración de contraseña",
+        html_content
+    )

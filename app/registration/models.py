@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+import uuid
 
 from beanie import Document, before_event, Replace
 from pydantic import BaseModel, EmailStr, Field
@@ -47,3 +48,12 @@ class UserDraft(Document, UserBase):
 
     class Settings:
         name = "draftUsers"
+
+
+class PwdResetToken(Document):
+    value: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    expirationDate: datetime = datetime.utcnow() + timedelta(minutes=5)
+    userEmail: EmailStr
+
+    class Settings:
+        name = "pwdResetTokens"
